@@ -22,67 +22,86 @@ def format_day_month(dates):
 @st.cache_data
 def load_excel(file):
     try:
-        # try both capitalizations (September / september)
-        try:
-            raw = pd.read_excel(file, sheet_name="September", header=None, decimal=',')
-        except Exception:
-            raw = pd.read_excel(file, sheet_name="september", header=None, decimal=',')
-
-        if raw.empty or raw.isna().all().all():
-            try:
-                raw = pd.read_excel(file, sheet_name="September", header=None, decimal='.')
-            except Exception:
-                raw = pd.read_excel(file, sheet_name="september", header=None, decimal='.')
-
+        # Read Angaben sheet (unchanged)
         angaben_df = pd.read_excel(file, sheet_name="Angaben", decimal=',')
         if angaben_df.empty or angaben_df.isna().all().all():
             angaben_df = pd.read_excel(file, sheet_name="Angaben", decimal='.')
 
-        # --- parse into tidy structure (raw long) ---
-        dates = raw.iloc[0, 1:].tolist()
+        # Attempt to read multiple month sheets: Juli, August, September, Oktober
+        months = ["Juli", "August", "September", "Oktober"]
         records = []
-        i, n = 1, len(raw)
-
-        while i < n:
-            # skip empty rows
-            while i < n and (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
-                i += 1
-            if i >= n:
-                break
-            block_start = i
-            i += 1
-            # find end of block
-            while i < n and not (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
-                i += 1
-            block_end = i
-
-            block = raw.iloc[block_start:block_end].reset_index(drop=True)
-            if block.empty:
-                continue
-
-            teams    = block.iloc[0, 1:].tolist()
-            schichten = block.iloc[1, 1:].tolist()
-
-            for kpi_row in range(2, block.shape[0]):
-                kpi_name = block.iloc[kpi_row, 0]
-                if pd.isna(kpi_name) or str(kpi_name).strip() == '':
+        for month in months:
+            # Try common casings for sheet names
+            for sheet_name in (month, month.lower(), month.capitalize()):
+                try:
+                    raw = pd.read_excel(file, sheet_name=sheet_name, header=None, decimal=',')
+                except Exception:
+                    raw = None
+                # Fallback to dot decimal if read produced empty frame
+                if (raw is None) or raw.empty or raw.isna().all().all():
+                    try:
+                        raw = pd.read_excel(file, sheet_name=sheet_name, header=None, decimal='.')
+                    except Exception:
+                        raw = None
+                if raw is None or raw.empty or raw.isna().all().all():
                     continue
-                for col in range(1, block.shape[1]):
-                    datum   = dates[col-1]
-                    team    = teams[col-1]
-                    schicht = schichten[col-1]
-                    value   = block.iloc[kpi_row, col]
-                    if pd.isna(datum) or str(datum).strip() == '':
-                        continue
-                    records.append({
-                        "Datum": datum,
-                        "Team": team,
-                        "Schicht": schicht,
-                        "Metric": kpi_name,
-                        "Value": value
-                    })
-            i += 1
 
+                # Parse this raw sheet into records (same logic as before)
+                try:
+                    dates = raw.iloc[0, 1:].tolist()
+                except Exception:
+                    # Malformed sheet, skip
+                    continue
+
+                i, n = 1, len(raw)
+                while i < n:
+                    # Skip empty rows
+                    while i < n and (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
+                        i += 1
+                    if i >= n:
+                        break
+                    block_start = i
+                    i += 1
+                    # Find end of block
+                    while i < n and not (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
+                        i += 1
+                    block_end = i
+
+                    block = raw.iloc[block_start:block_end].reset_index(drop=True)
+                    if block.empty:
+                        continue
+
+                    teams = block.iloc[0, 1:].tolist()
+                    schichten = block.iloc[1, 1:].tolist()
+
+                    for kpi_row in range(2, block.shape[0]):
+                        kpi_name = block.iloc[kpi_row, 0]
+                        if pd.isna(kpi_name) or str(kpi_name).strip() == '':
+                            continue
+                        for col in range(1, block.shape[1]):
+                            datum = dates[col-1]
+                            team = teams[col-1]
+                            schicht = schichten[col-1]
+                            value = block.iloc[kpi_row, col]
+                            if pd.isna(datum) or str(datum).strip() == '':
+                                continue
+                            records.append({
+                                "Datum": datum,
+                                "Team": team,
+                                "Schicht": schicht,
+                                "Metric": kpi_name,
+                                "Value": value
+                            })
+                    i += 1
+                # Stop trying other casings for this month once a valid sheet parsed
+                break
+
+        # If no records found, return empty frames (preserve prior error behavior)
+        if not records:
+            st.error("⚠️ Keine Daten in den Blättern Juli/August/September/Oktober gefunden.")
+            return pd.DataFrame(), pd.DataFrame(), angaben_df
+
+        # Build df_long exactly as before
         df_long = pd.DataFrame(records)
         df_long["Value"] = pd.to_numeric(df_long["Value"], errors="coerce")
         df_long["Datum"] = pd.to_datetime(df_long["Datum"], errors="coerce", dayfirst=True)
@@ -101,7 +120,7 @@ def load_excel(file):
         )
         df_wide.columns = [str(col) for col in df_wide.columns]
 
-        # determine angaben minutes column (flexible)
+        # Determine angaben minutes column (flexible)
         angaben_col = None
         for c in angaben_df.columns:
             if "min" in str(c).lower() or "minute" in str(c).lower() or "vorgabe" in str(c).lower():
@@ -165,7 +184,7 @@ def load_excel(file):
         summary_df = df_wide.apply(calc_shift_summary, axis=1)
         summary_df[['Datum', 'Team', 'Schicht']] = df_wide[['Datum', 'Team', 'Schicht']]
 
-        # rename to nice names
+        # Rename to nice names
         nice_names = {
             "Sägen": "Sägen (Stück)",
             "richten": "Richten (Stück)",
@@ -195,12 +214,12 @@ def load_excel(file):
         ordered_cols = main_cols + rest_cols
         summary_df = summary_df.loc[:, ordered_cols]
 
-        # normalize Schicht and order
+        # Normalize Schicht and order
         summary_df["Schicht"] = summary_df["Schicht"].astype(str).str.strip().str.title()
         summary_df["Schicht"] = pd.Categorical(summary_df["Schicht"], categories=shift_order, ordered=True)
         summary_df = summary_df.sort_values(["Datum", "Schicht", "Team"]).reset_index(drop=True)
 
-        # melt tidy for downstream plots (same shape as shift_summary_kwXX_tidy.csv)
+        # Melt tidy for downstream plots (same shape as shift_summary_kwXX_tidy.csv)
         id_cols = ["Datum", "Schicht", "Team"]
         value_cols = [c for c in summary_df.columns if c not in id_cols]
         summary_long = (
