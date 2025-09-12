@@ -152,7 +152,7 @@ def load_excel(file):
                 'Serbien abladen Tautliner': get_value('entladen Serbien Tautliner'),
                 'Serbien einlagern ': get_value('Serbien Rollen eingelagert'),
                 'sonstiges / Aufräumarbeiten (in Std)': get_value('dafür gebraucht (Stunden)'),
-                'vorhandene MA': get_value('Anzahl MA')
+                'vorhandene MA': get_value('Anzahl MA ')
             }
 
             kpi_to_angaben = {
@@ -446,6 +446,7 @@ def plot_weekly_charts(df, target_date):
         # ========== 5) Anzahl MA pro Tag ==========
         workers = df[df["Metric"] == "Vorhandene MA"].copy()
         if not workers.empty:
+            # Group workers by date and shift
             w = workers.groupby(["Datum", "Schicht"])["Value"].sum().unstack("Schicht").fillna(0)
             w = w.reindex(columns=shift_order).fillna(0)
             w = w.reindex(all_dates).fillna(0)
@@ -460,7 +461,7 @@ def plot_weekly_charts(df, target_date):
             ax.set_xticks(range(len(all_dates)))
             ax.set_xticklabels(format_day_month(all_dates), rotation=45)
 
-            # >>> average only over days with any workers recorded
+            # Calculate the average number of workers only for days with recorded data
             day_totals_workers = w.sum(axis=1)
             valid_workers_days = day_totals_workers > 0
             avg_workers = day_totals_workers[valid_workers_days].mean() if valid_workers_days.any() else 0.0
@@ -473,14 +474,14 @@ def plot_weekly_charts(df, target_date):
                 color="blue", fontsize=12, fontweight="bold", ha="left", va="bottom"
             )
 
-            # numbers on stacks + totals
+            # Add numbers for each shift on the bars and total above each column
             for i, day in enumerate(all_dates):
                 bottom = 0
                 for shift in shift_order:
                     value = w.loc[day, shift] if shift in w.columns else 0
                     if value > 0:
                         val_str = f"{value:.1f}" if not float(value).is_integer() else f"{int(value)}"
-                        ax.text(i, bottom + value/2, val_str, ha="center", va="center",
+                        ax.text(i, bottom + value / 2, val_str, ha="center", va="center",
                                 color="white", fontsize=10, fontweight="bold")
                     bottom += value
                 total = w.loc[day].sum()
@@ -490,7 +491,6 @@ def plot_weekly_charts(df, target_date):
 
             plt.tight_layout()
             figs.append(fig)
-
 
         return figs
     except Exception as e:
