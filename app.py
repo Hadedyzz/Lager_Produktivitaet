@@ -1,23 +1,8 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
-from datetime import datetime, timedelta
-
-# --- Month-to-Sheet Mapping ---
-MONTH_NAME_BY_NUM = {
-    1: "Januar", 2: "Februar", 3: "März", 4: "April", 5: "Mai", 6: "Juni",
-    7: "Juli", 8: "August", 9: "September", 10: "Oktober", 11: "November", 12: "Dezember"
-}
-
-def months_in_range(start_date, end_date):
-    """Return a list of month numbers in the given date range."""
-    return list(pd.date_range(start_date, end_date, freq="MS").month)
-
-def sheets_for_range(sheet_names, start_date, end_date):
-    """Return the sheet names corresponding to the months in the date range."""
-    months = months_in_range(start_date, end_date)
-    return [MONTH_NAME_BY_NUM[m] for m in months if MONTH_NAME_BY_NUM[m] in sheet_names]
+import numpy as np
+from datetime import datetime
 
 # --- new: fixed shift order and color mapping ---
 shift_color_map = {"Früh": "#1f77b4", "Spät": "#ff7f0e", "Nacht": "#2ca02c"}
@@ -31,115 +16,203 @@ def format_day_month(dates):
     idx = pd.to_datetime(dates)
     return [d.strftime("%d.%m") if not pd.isna(d) else "" for d in idx]
 
-# --- Cached Data Loaders ---
-@st.cache_data
-def read_angaben(file):
-    """Read and normalize the Angaben sheet."""
-    angaben_df = pd.read_excel(file, sheet_name="Angaben", decimal=",")
-    angaben_df["Task"] = angaben_df["Task"].str.strip().str.lower()
-    return angaben_df
-
-@st.cache_data
-def parse_month_sheet(file, sheet_name):
-    """Parse a single month sheet into a tidy DataFrame."""
-    raw = pd.read_excel(file, sheet_name=sheet_name, header=None, decimal=",")
-    if raw.empty or raw.isna().all().all():
-        raw = pd.read_excel(file, sheet_name=sheet_name, header=None, decimal=".")
-    
-    dates = raw.iloc[0, 1:].tolist()
-    records = []
-    i, n = 1, len(raw)
-
-    while i < n:
-        while i < n and (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
-            i += 1
-        if i >= n:
-            break
-        block_start = i
-        i += 1
-        while i < n and not (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
-            i += 1
-        block_end = i
-
-        block = raw.iloc[block_start:block_end].reset_index(drop=True)
-        if block.empty:
-            continue
-
-        teams = block.iloc[0, 1:].tolist()
-        schichten = block.iloc[1, 1:].tolist()
-
-        for kpi_row in range(2, block.shape[0]):
-            kpi_name = block.iloc[kpi_row, 0]
-            if pd.isna(kpi_name) or str(kpi_name).strip() == '':
-                continue
-            for col in range(1, block.shape[1]):
-                datum = dates[col - 1]
-                team = teams[col - 1]
-                schicht = schichten[col - 1]
-                value = block.iloc[kpi_row, col]
-                if pd.isna(datum) or str(datum).strip() == '':
-                    continue
-                records.append({
-                    "Datum": datum,
-                    "Team": team,
-                    "Schicht": schicht,
-                    "Metric": kpi_name,
-                    "Value": value
-                })
-
-    df_long = pd.DataFrame(records)
-    df_long["Value"] = pd.to_numeric(df_long["Value"], errors="coerce")
-    df_long["Datum"] = pd.to_datetime(df_long["Datum"], errors="coerce", dayfirst=True)
-    return df_long
-
 # =====================
 # 1. LOAD AND PREPARE DATA
 # =====================
 @st.cache_data
 def load_excel(file):
     try:
-        xls = pd.ExcelFile(file)
-        sheet_names = set(xls.sheet_names)
+        # try both capitalizations (September / september)
+        try:
+            raw = pd.read_excel(file, sheet_name="September", header=None, decimal=',')
+        except Exception:
+            raw = pd.read_excel(file, sheet_name="september", header=None, decimal=',')
 
-        angaben_df = read_angaben(file)
-
-        mode = st.selectbox("Analysemodus wählen", ["Woche", "Tag"])
-
-        if mode == "Woche":
-            week_date = st.date_input("Datum innerhalb der Woche auswählen", datetime.today())
-            start_of_week = week_date - timedelta(days=week_date.weekday())
-            end_of_week = start_of_week + timedelta(days=4)  # Monday to Friday
-            needed_sheets = sheets_for_range(sheet_names, start_of_week, end_of_week)
-
-        elif mode == "Tag":
-            day_date = st.date_input("Tag auswählen", datetime.today())
-            start_of_week = end_of_week = day_date
-            needed_sheets = sheets_for_range(sheet_names, day_date, day_date)
-
-        # Load and concatenate data from needed sheets
-        dfs = []
-        for sheet in needed_sheets:
+        if raw.empty or raw.isna().all().all():
             try:
-                dfs.append(parse_month_sheet(file, sheet))
+                raw = pd.read_excel(file, sheet_name="September", header=None, decimal='.')
             except Exception:
-                st.warning(f"⚠️ Tab '{sheet}' fehlt oder konnte nicht geladen werden.")
-        if not dfs:
-            st.warning("⚠️ Keine Daten für den ausgewählten Zeitraum gefunden.")
-        else:
-            df_long = pd.concat(dfs, ignore_index=True)
-            # Proceed with existing summary and plotting logic
-            df_summary = df_long  # Replace with your summary computation logic
-            if mode == "Woche":
-                figs = plot_weekly_charts(df_summary, week_date)
-                for fig in figs:
-                    st.pyplot(fig)
-            elif mode == "Tag":
-                figs = plot_daily_charts(df_summary, angaben_df, day_date)
-                for fig in figs:
-                    st.pyplot(fig)
-    except Exception as e:
-        st.error(f"⚠️ Fehler in der Streamlit-App: {e}")
+                raw = pd.read_excel(file, sheet_name="september", header=None, decimal='.')
 
+        angaben_df = pd.read_excel(file, sheet_name="Angaben", decimal=',')
+        if angaben_df.empty or angaben_df.isna().all().all():
+            angaben_df = pd.read_excel(file, sheet_name="Angaben", decimal='.')
+
+        # --- parse into tidy structure (raw long) ---
+        dates = raw.iloc[0, 1:].tolist()
+        records = []
+        i, n = 1, len(raw)
+
+        while i < n:
+            # skip empty rows
+            while i < n and (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
+                i += 1
+            if i >= n:
+                break
+            block_start = i
+            i += 1
+            # find end of block
+            while i < n and not (pd.isna(raw.iloc[i, 0]) or str(raw.iloc[i, 0]).strip() == ''):
+                i += 1
+            block_end = i
+
+            block = raw.iloc[block_start:block_end].reset_index(drop=True)
+            if block.empty:
+                continue
+
+            teams    = block.iloc[0, 1:].tolist()
+            schichten = block.iloc[1, 1:].tolist()
+
+            for kpi_row in range(2, block.shape[0]):
+                kpi_name = block.iloc[kpi_row, 0]
+                if pd.isna(kpi_name) or str(kpi_name).strip() == '':
+                    continue
+                for col in range(1, block.shape[1]):
+                    datum   = dates[col-1]
+                    team    = teams[col-1]
+                    schicht = schichten[col-1]
+                    value   = block.iloc[kpi_row, col]
+                    if pd.isna(datum) or str(datum).strip() == '':
+                        continue
+                    records.append({
+                        "Datum": datum,
+                        "Team": team,
+                        "Schicht": schicht,
+                        "Metric": kpi_name,
+                        "Value": value
+                    })
+            i += 1
+
+        df_long = pd.DataFrame(records)
+        df_long["Value"] = pd.to_numeric(df_long["Value"], errors="coerce")
+        df_long["Datum"] = pd.to_datetime(df_long["Datum"], errors="coerce", dayfirst=True)
+
+        # --- Compute per-shift summary (same logic as summary scripts) ---
+        # Pivot to wide
+        df_wide = (
+            df_long
+            .pivot_table(
+                index=["Datum", "Team", "Schicht"],
+                columns="Metric",
+                values="Value",
+                aggfunc='first'
+            )
+            .reset_index()
+        )
+        df_wide.columns = [str(col) for col in df_wide.columns]
+
+        # determine angaben minutes column (flexible)
+        angaben_col = None
+        for c in angaben_df.columns:
+            if "min" in str(c).lower() or "minute" in str(c).lower() or "vorgabe" in str(c).lower():
+                angaben_col = c
+                break
+        if angaben_col is None:
+            angaben_col = "Minutes/roll" if "Minutes/roll" in angaben_df.columns else angaben_df.columns[1]
+
+        angaben_dict = dict(zip(angaben_df['Task'], angaben_df[angaben_col]))
+
+        def calc_shift_summary(row):
+            def get_value(col):
+                val = row.get(col, 0)
+                return val if pd.notnull(val) else 0
+
+            summary = {
+                'Sägen': get_value('Auftragsrollen gesägt') + get_value('Abfallrollen gesägt'),
+                'rauslegen': get_value('rausgelegte Rollen') + get_value('Säge raus'),
+                'zusammenfahren': get_value('zusammengefahrene Rollen'),
+                'verladen': get_value('verladene Rollen'),
+                'cutten': get_value('Cut Rollen'),
+                'absetzen': get_value('eingelagerte Rollen Produktion'),
+                'absetzen 2': get_value('Rollen umgelagert Absetzer') + get_value('Säge eingelagert'),
+                'kontrolle DMG/Retouren': get_value('Damaged bearbeitet') + get_value('Retouren bearbeitet'),
+                'packen Paletten liegend': get_value('Rollen auf Palette liegend (Rollenanzahl)'),
+                'packen Paletten stehend': get_value('Rollen auf Palette stehend (Rollenanzahl)'),
+                'Souscouche abladen': get_value('Souscouche abgeladen (Rollen)'),
+                'Serbien abladen': get_value('entladen Serbien'),
+                'Serbien abladen Tautliner': get_value('entladen Serbien Tautliner'),
+                'Serbien einlagern ': get_value('Serbien Rollen eingelagert'),
+                'sonstiges / Aufräumarbeiten (in Std)': get_value('dafür gebraucht (Stunden)'),
+                'vorhandene MA': get_value('Anzahl MA')
+            }
+
+            kpi_to_angaben = {
+                'Sägen': 'sägen',
+                'rauslegen': 'rauslegen',
+                'zusammenfahren': 'zusammenfahren',
+                'verladen': 'verladen',
+                'cutten': 'cutten',
+                'absetzen': 'absetzen',
+                'absetzen 2': 'absetzen 2',
+                'kontrolle DMG/Retouren': 'kontrolle DMG/Retouren',
+                'packen Paletten liegend': 'packen Paletten liegend',
+                'packen Paletten stehend': 'packen Paletten stehend',
+                'Souscouche abladen': 'Souscouche abladen',
+                'Serbien abladen': 'Serbien abladen',
+                'Serbien abladen Tautliner': 'Serbien abladen Tautliner',
+                'Serbien einlagern ': 'Serbien einlagern '
+            }
+
+            total_minutes = sum(
+                summary[kpi] * angaben_dict.get(task, 0)
+                for kpi, task in kpi_to_angaben.items()
+            )
+            total_hours = total_minutes / 60 + summary.get('sonstiges / Aufräumarbeiten (in Std)', 0)
+            summary['benötigte MA'] = round(total_hours / 7.5, 1) if total_hours > 0 else 0
+            summary['Differenz MA'] = round(summary['vorhandene MA'] - summary['benötigte MA'], 1)
+            return pd.Series(summary)
+
+        summary_df = df_wide.apply(calc_shift_summary, axis=1)
+        summary_df[['Datum', 'Team', 'Schicht']] = df_wide[['Datum', 'Team', 'Schicht']]
+
+        # rename to nice names
+        nice_names = {
+            "Sägen": "Sägen (Stück)",
+            "richten": "Richten (Stück)",
+            "rauslegen": "Rauslegen (Stück)",
+            "zusammenfahren": "Zusammenfahren (Stück)",
+            "verladen": "Verladen (Stück)",
+            "cutten": "Cutten (Stück)",
+            "absetzen": "Absetzen (Stück)",
+            "absetzen 2": "Absetzen 2 (Stück)",
+            "kontrolle DMG/Retouren": "Kontrolle DMG/Retouren (Stück)",
+            "packen Paletten liegend": "Packen Paletten liegend (Stück)",
+            "packen Paletten stehend": "Packen Paletten stehend (Stück)",
+            "Souscouche abladen": "Souscouche abladen (Stück)",
+            "Serbien abladen": "Serbien abladen (Stück)",
+            "Serbien abladen Tautliner": "Serbien abladen Tautliner (Stück)",
+            "Serbien einlagern ": "Serbien einlagern (Stück)",
+            "sonstiges / Aufräumarbeiten (in Std)": "Sonstiges / Aufräumarbeiten (Std)",
+            "vorhandene MA": "Vorhandene MA",
+            "benötigte MA": "Benötigte MA",
+            "Differenz MA": "Differenz MA"
+        }
+        summary_df = summary_df.rename(columns=nice_names)
+
+        # Re-order columns
+        main_cols = ["Datum", "Schicht", "Team", "Vorhandene MA", "Benötigte MA", "Differenz MA"]
+        rest_cols = [c for c in summary_df.columns if c not in main_cols]
+        ordered_cols = main_cols + rest_cols
+        summary_df = summary_df.loc[:, ordered_cols]
+
+        # normalize Schicht and order
+        summary_df["Schicht"] = summary_df["Schicht"].astype(str).str.strip().str.title()
+        summary_df["Schicht"] = pd.Categorical(summary_df["Schicht"], categories=shift_order, ordered=True)
+        summary_df = summary_df.sort_values(["Datum", "Schicht", "Team"]).reset_index(drop=True)
+
+        # melt tidy for downstream plots (same shape as shift_summary_kwXX_tidy.csv)
+        id_cols = ["Datum", "Schicht", "Team"]
+        value_cols = [c for c in summary_df.columns if c not in id_cols]
+        summary_long = (
+            summary_df
+            .melt(id_vars=id_cols, value_vars=value_cols, var_name="Metric", value_name="Value")
+            .sort_values(id_cols + ["Metric"])
+        )
+
+        return df_long, summary_long, angaben_df
+    except Exception as e:
+        st.error(f"⚠️ Fehler beim Laden der Excel-Datei: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
 # =====================
 # 2. WEEKLY PLOTS
@@ -471,44 +544,29 @@ st.title("📊 Rollenbewegung Dashboard")
 uploaded_file = st.file_uploader("Excel hochladen", type=["xlsx"])
 if uploaded_file:
     try:
-        xls = pd.ExcelFile(uploaded_file)
-        sheet_names = set(xls.sheet_names)
+        df_raw, df_summary, angaben_df = load_excel(uploaded_file)
 
-        angaben_df = read_angaben(uploaded_file)
-
-        mode = st.selectbox("Analysemodus wählen", ["Woche", "Tag"])
-
-        if mode == "Woche":
-            week_date = st.date_input("Datum innerhalb der Woche auswählen", datetime.today())
-            start_of_week = week_date - timedelta(days=week_date.weekday())
-            end_of_week = start_of_week + timedelta(days=4)  # Monday to Friday
-            needed_sheets = sheets_for_range(sheet_names, start_of_week, end_of_week)
-
-        elif mode == "Tag":
-            day_date = st.date_input("Tag auswählen", datetime.today())
-            start_of_week = end_of_week = day_date
-            needed_sheets = sheets_for_range(sheet_names, day_date, day_date)
-
-        # Load and concatenate data from needed sheets
-        dfs = []
-        for sheet in needed_sheets:
-            try:
-                dfs.append(parse_month_sheet(uploaded_file, sheet))
-            except Exception:
-                st.warning(f"⚠️ Tab '{sheet}' fehlt oder konnte nicht geladen werden.")
-        if not dfs:
-            st.warning("⚠️ Keine Daten für den ausgewählten Zeitraum gefunden.")
+        if df_raw.empty or df_summary.empty or angaben_df.empty:
+            st.warning("⚠️ Die hochgeladene Datei enthält keine gültigen Daten.")
         else:
-            df_long = pd.concat(dfs, ignore_index=True)
-            # Proceed with existing summary and plotting logic
-            df_summary = df_long  # Replace with your summary computation logic
+            st.session_state["df_raw"] = df_raw
+            st.session_state["df_summary"] = df_summary
+            st.session_state["angaben_df"] = angaben_df
+
+            mode = st.selectbox("Analysemodus wählen", ["Woche", "Tag"])
+
             if mode == "Woche":
-                figs = plot_weekly_charts(df_summary, week_date)
-                for fig in figs:
-                    st.pyplot(fig)
+                week_date = st.date_input("Datum innerhalb der Woche auswählen", datetime.today())
+                if st.button("Wochen-Analyse starten"):
+                    figs = plot_weekly_charts(df_summary, week_date)
+                    for fig in figs:
+                        st.pyplot(fig)
+
             elif mode == "Tag":
-                figs = plot_daily_charts(df_summary, angaben_df, day_date)
-                for fig in figs:
-                    st.pyplot(fig)
+                day_date = st.date_input("Tag auswählen", datetime.today())
+                if st.button("Tages-Analyse starten"):
+                    figs = plot_daily_charts(df_summary, angaben_df, day_date)
+                    for fig in figs:
+                        st.pyplot(fig)
     except Exception as e:
         st.error(f"⚠️ Fehler in der Streamlit-App: {e}")
