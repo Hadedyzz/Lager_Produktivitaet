@@ -96,83 +96,108 @@ def plot_weekly_charts(df, target_date):
     # normalize shifts
     df = df.copy()
     df["Schicht"] = df["Schicht"].astype(str).str.strip().str.title()
+    df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
+    df["Value"] = pd.to_numeric(df["Value"], errors="coerce").fillna(0)
+
+    # limit to selected week
+    df = df[(df["Datum"] >= start_of_week) & (df["Datum"] <= end_of_week)]
 
     # ------------------------------------------------------------
     # 1. Line chart: total rolls per day
     # ------------------------------------------------------------
     rolls_df = df[df["Metric"].str.contains("rollen", case=False, na=False)].copy()
-    rolls_df["Value"] = pd.to_numeric(rolls_df["Value"], errors="coerce")
     rolls_series = rolls_df.groupby("Datum")["Value"].sum().reindex(all_dates).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(10,5))
-    rolls_series.plot(kind="line", ax=ax, marker="o")
-    ax.set_title("Gesamtanzahl der Rollenbewegungen pro Tag")
-    ax.set_xlabel("Datum")
-    ax.set_ylabel("Anzahl Rollenbewegungen")
-    ax.set_xticklabels(format_day_month(rolls_series.index), rotation=45)
-    target = 70
-    avg_rolls = rolls_series.mean()
-    ax.axhline(target, color="red", linestyle="--", linewidth=2, label="Ziel 70")
-    ax.axhline(avg_rolls, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
-    ax.legend()
-    figs.append(fig)
+    if rolls_series.values.sum() > 0:
+        fig, ax = plt.subplots(figsize=(10,5))
+        rolls_series.plot(kind="line", ax=ax, marker="o")
+        ax.set_title("Gesamtanzahl der Rollenbewegungen pro Tag")
+        ax.set_xlabel("Datum")
+        ax.set_ylabel("Anzahl Rollenbewegungen")
+        ax.set_xticks(range(len(rolls_series.index)))
+        ax.set_xticklabels(format_day_month(rolls_series.index), rotation=45)
+        target = 70
+        avg_rolls = rolls_series.mean()
+        ax.axhline(target, color="red", linestyle="--", linewidth=2, label="Ziel 70")
+        ax.axhline(avg_rolls, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
+        ax.legend()
+        figs.append(fig)
+    else:
+        fig, ax = plt.subplots(figsize=(10,4))
+        ax.text(0.5, 0.5, "Keine Rollenbewegungen in diesem Zeitraum.", ha='center', va='center')
+        ax.axis('off')
+        figs.append(fig)
 
     # ------------------------------------------------------------
     # 2. Stacked column chart for "sägen" rolls per day by shift
     # ------------------------------------------------------------
     saegen_df = df[df["Metric"].str.contains("sägen", case=False, na=False)].copy()
-    saegen_df["Value"] = pd.to_numeric(saegen_df["Value"], errors="coerce")
+    saegen_df["Value"] = pd.to_numeric(saegen_df["Value"], errors="coerce").fillna(0)
     saegen_by_day_shift = saegen_df.groupby(["Datum", "Schicht"])["Value"].sum().unstack("Schicht").fillna(0)
     # enforce fixed shift order and drop missing columns
     saegen_by_day_shift = saegen_by_day_shift.reindex(columns=shift_order).fillna(0)
     saegen_by_day_shift = saegen_by_day_shift.reindex(all_dates).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(12,6))
-    cols = shift_colors_for_cols(saegen_by_day_shift.columns)
-    saegen_by_day_shift.plot(kind="bar", stacked=True, ax=ax, color=cols)
-    ax.set_title("Anzahl gesägte Rollen pro Tag")
-    ax.set_xlabel("Datum")
-    ax.set_ylabel("Anzahl gesägte Rollen")
-    ax.set_xticklabels(format_day_month(saegen_by_day_shift.index), rotation=45)
-    target = 70
-    avg_saegen = saegen_by_day_shift.sum(axis=1).mean()
-    ax.axhline(target, color="red", linestyle="--", linewidth=2, label="Ziel 70")
-    ax.axhline(avg_saegen, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
-    # color legend text to match shift
-    leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
-    if leg:
-        texts = leg.get_texts()
-        # first two texts are the horizontal lines labels if present -> find shift labels by name
-        for t in texts:
-            txt = t.get_text()
-            if txt in saegen_by_day_shift.columns:
-                t.set_color(shift_color_map.get(txt, "#000"))
-    figs.append(fig)
+    if (not saegen_by_day_shift.empty) and (saegen_by_day_shift.values.sum() > 0):
+        fig, ax = plt.subplots(figsize=(12,6))
+        cols = shift_colors_for_cols(saegen_by_day_shift.columns)
+        saegen_by_day_shift.plot(kind="bar", stacked=True, ax=ax, color=cols)
+        ax.set_title("Anzahl gesägte Rollen pro Tag")
+        ax.set_xlabel("Datum")
+        ax.set_ylabel("Anzahl gesägte Rollen")
+        ax.set_xticks(range(len(saegen_by_day_shift.index)))
+        ax.set_xticklabels(format_day_month(saegen_by_day_shift.index), rotation=45)
+        target = 70
+        avg_saegen = saegen_by_day_shift.sum(axis=1).mean()
+        ax.axhline(target, color="red", linestyle="--", linewidth=2, label="Ziel 70")
+        ax.axhline(avg_saegen, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
+        # color legend text to match shift
+        leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+        if leg:
+            texts = leg.get_texts()
+            for t in texts:
+                txt = t.get_text()
+                if txt in saegen_by_day_shift.columns:
+                    t.set_color(shift_color_map.get(txt, "#000"))
+        figs.append(fig)
+    else:
+        fig, ax = plt.subplots(figsize=(12,3))
+        ax.text(0.5, 0.5, "Keine Säge-Daten für diese Woche.", ha='center', va='center')
+        ax.axis('off')
+        figs.append(fig)
 
     # ------------------------------------------------------------
     # 4. Stacked bar graph of available workers per day by shift
     # ------------------------------------------------------------
     workers = df[df["Metric"] == "Vorhandene MA"].copy()
+    workers["Value"] = pd.to_numeric(workers["Value"], errors="coerce").fillna(0)
     workers_by_day_shift = workers.groupby(["Datum", "Schicht"])["Value"].sum().unstack("Schicht").fillna(0)
     workers_by_day_shift = workers_by_day_shift.reindex(columns=shift_order).fillna(0)
     workers_by_day_shift = workers_by_day_shift.reindex(all_dates).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(10,5))
-    cols = shift_colors_for_cols(workers_by_day_shift.columns)
-    workers_by_day_shift.plot(kind="bar", stacked=True, ax=ax, color=cols)
-    ax.set_title("Anzahl MA pro Tag")
-    ax.set_xlabel("Datum")
-    ax.set_ylabel("Anzahl MA")
-    ax.set_xticklabels(format_day_month(workers_by_day_shift.index), rotation=45)
-    avg_workers = workers_by_day_shift.sum(axis=1).mean()
-    ax.axhline(avg_workers, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
-    leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
-    if leg:
-        for t in leg.get_texts():
-            txt = t.get_text()
-            if txt in workers_by_day_shift.columns:
-                t.set_color(shift_color_map.get(txt, "#000"))
-    figs.append(fig)
+    if (not workers_by_day_shift.empty) and (workers_by_day_shift.values.sum() > 0):
+        fig, ax = plt.subplots(figsize=(10,5))
+        cols = shift_colors_for_cols(workers_by_day_shift.columns)
+        workers_by_day_shift.plot(kind="bar", stacked=True, ax=ax, color=cols)
+        ax.set_title("Anzahl MA pro Tag")
+        ax.set_xlabel("Datum")
+        ax.set_ylabel("Anzahl MA")
+        ax.set_xticks(range(len(workers_by_day_shift.index)))
+        ax.set_xticklabels(format_day_month(workers_by_day_shift.index), rotation=45)
+        avg_workers = workers_by_day_shift.sum(axis=1).mean()
+        ax.axhline(avg_workers, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
+        leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+        if leg:
+            for t in leg.get_texts():
+                txt = t.get_text()
+                if txt in workers_by_day_shift.columns:
+                    t.set_color(shift_color_map.get(txt, "#000"))
+        figs.append(fig)
+    else:
+        fig, ax = plt.subplots(figsize=(10,3))
+        ax.text(0.5, 0.5, "Keine Mitarbeiterdaten für diese Woche.", ha='center', va='center')
+        ax.axis('off')
+        figs.append(fig)
 
     # ------------------------------------------------------------
     # 5. Stacked column chart: total rolls per day by shift
@@ -181,22 +206,29 @@ def plot_weekly_charts(df, target_date):
     total_rolls_per_day_shift = total_rolls_per_day_shift.reindex(columns=shift_order).fillna(0)
     total_rolls_per_day_shift = total_rolls_per_day_shift.reindex(all_dates).fillna(0)
 
-    fig, ax = plt.subplots(figsize=(12,6))
-    cols = shift_colors_for_cols(total_rolls_per_day_shift.columns)
-    total_rolls_per_day_shift.plot(kind="bar", stacked=True, ax=ax, color=cols)
-    ax.set_title("Gesamte Anzahl an bewegten Rollen pro Tag nach Schicht")
-    ax.set_xlabel("Datum")
-    ax.set_ylabel("Gesamtrollen")
-    ax.set_xticklabels(format_day_month(total_rolls_per_day_shift.index), rotation=45)
-    avg_shift = total_rolls_per_day_shift.sum(axis=1).mean()
-    ax.axhline(avg_shift, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
-    leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
-    if leg:
-        for t in leg.get_texts():
-            txt = t.get_text()
-            if txt in total_rolls_per_day_shift.columns:
-                t.set_color(shift_color_map.get(txt, "#000"))
-    figs.append(fig)
+    if (not total_rolls_per_day_shift.empty) and (total_rolls_per_day_shift.values.sum() > 0):
+        fig, ax = plt.subplots(figsize=(12,6))
+        cols = shift_colors_for_cols(total_rolls_per_day_shift.columns)
+        total_rolls_per_day_shift.plot(kind="bar", stacked=True, ax=ax, color=cols)
+        ax.set_title("Gesamte Anzahl an bewegten Rollen pro Tag nach Schicht")
+        ax.set_xlabel("Datum")
+        ax.set_ylabel("Gesamtrollen")
+        ax.set_xticks(range(len(total_rolls_per_day_shift.index)))
+        ax.set_xticklabels(format_day_month(total_rolls_per_day_shift.index), rotation=45)
+        avg_shift = total_rolls_per_day_shift.sum(axis=1).mean()
+        ax.axhline(avg_shift, color="blue", linestyle="--", linewidth=2, label="Durchschnitt")
+        leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+        if leg:
+            for t in leg.get_texts():
+                txt = t.get_text()
+                if txt in total_rolls_per_day_shift.columns:
+                    t.set_color(shift_color_map.get(txt, "#000"))
+        figs.append(fig)
+    else:
+        fig, ax = plt.subplots(figsize=(12,3))
+        ax.text(0.5, 0.5, "Keine Rollen-Daten für diese Woche.", ha='center', va='center')
+        ax.axis('off')
+        figs.append(fig)
 
     return figs
 
@@ -206,6 +238,7 @@ def plot_weekly_charts(df, target_date):
 def plot_daily_charts(df, angaben_df, target_day):
     figs = []
     df["Datum"] = pd.to_datetime(df["Datum"], errors="coerce")
+    df["Value"] = pd.to_numeric(df["Value"], errors="coerce").fillna(0)
     day_data = df[(df["Datum"].dt.date == target_day) & (df["Metric"].str.contains(r"\(Stück\)$"))].copy()
 
     # Join with Angaben
@@ -217,47 +250,59 @@ def plot_daily_charts(df, angaben_df, target_day):
     shift_task["FTE"] = shift_task["Hours"] / 7.5
     shift_task = shift_task[shift_task["Hours"] > 0]
 
-    shift_color_map = {"Früh": "#1f77b4", "Spät": "#ff7f0e", "Nacht": "#2ca02c"}
-
     # Pareto hours
     stacked_df = shift_task.pivot_table(index="Task", columns="Schicht", values="Hours", aggfunc="sum", fill_value=0)
     stacked_df = stacked_df.reindex(columns=shift_order).fillna(0)
     task_order = stacked_df.sum(axis=1).sort_values(ascending=False).index
     stacked_df = stacked_df.reindex(task_order)
-    fig, ax = plt.subplots(figsize=(12,6))
-    cols = shift_colors_for_cols(stacked_df.columns)
-    stacked_df.plot(kind="bar", stacked=True, ax=ax, color=cols)
-    ax.set_title(f"Arbeitsstunden pro Aufgabe und Schicht am {target_day.strftime('%d.%m.%Y')}")
-    ax.set_xlabel("Aufgabe")
-    ax.set_ylabel("Stunden")
-    ax.set_xticklabels([t.capitalize() for t in task_order], rotation=60, ha="right")
-    leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
-    if leg:
-        for t in leg.get_texts():
-            txt = t.get_text()
-            if txt in stacked_df.columns:
-                t.set_color(shift_color_map.get(txt, "#000"))
-    figs.append(fig)
+    if (not stacked_df.empty) and (stacked_df.values.sum() > 0):
+        fig, ax = plt.subplots(figsize=(12,6))
+        cols = shift_colors_for_cols(stacked_df.columns)
+        stacked_df.plot(kind="bar", stacked=True, ax=ax, color=cols)
+        ax.set_title(f"Arbeitsstunden pro Aufgabe und Schicht am {target_day.strftime('%d.%m.%Y')}")
+        ax.set_xlabel("Aufgabe")
+        ax.set_ylabel("Stunden")
+        ax.set_xticks(range(len(task_order)))
+        ax.set_xticklabels([t.capitalize() for t in task_order], rotation=60, ha="right")
+        leg = ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+        if leg:
+            for t in leg.get_texts():
+                txt = t.get_text()
+                if txt in stacked_df.columns:
+                    t.set_color(shift_color_map.get(txt, "#000"))
+        figs.append(fig)
+    else:
+        fig, ax = plt.subplots(figsize=(12,3))
+        ax.text(0.5, 0.5, "Keine Arbeitsstunden-Daten für diesen Tag.", ha='center', va='center')
+        ax.axis('off')
+        figs.append(fig)
 
     # Pareto rolls
     stacked_rolls = shift_task.pivot_table(index="Task", columns="Schicht", values="Value", aggfunc="sum", fill_value=0)
     stacked_rolls = stacked_rolls.reindex(columns=shift_order).fillna(0)
     task_order_rolls = stacked_rolls.sum(axis=1).sort_values(ascending=False).index
     stacked_rolls = stacked_rolls.reindex(task_order_rolls)
-    fig2, ax2 = plt.subplots(figsize=(12,6))
-    cols2 = shift_colors_for_cols(stacked_rolls.columns)
-    stacked_rolls.plot(kind="bar", stacked=True, ax=ax2, color=cols2)
-    ax2.set_title(f"Rollen pro Aufgabe und Schicht am {target_day.strftime('%d.%m.%Y')}")
-    ax2.set_xlabel("Aufgabe")
-    ax2.set_ylabel("Rollen")
-    ax2.set_xticklabels([t.capitalize() for t in task_order_rolls], rotation=60, ha="right")
-    leg2 = ax2.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
-    if leg2:
-        for t in leg2.get_texts():
-            txt = t.get_text()
-            if txt in stacked_rolls.columns:
-                t.set_color(shift_color_map.get(txt, "#000"))
-    figs.append(fig2)
+    if (not stacked_rolls.empty) and (stacked_rolls.values.sum() > 0):
+        fig2, ax2 = plt.subplots(figsize=(12,6))
+        cols2 = shift_colors_for_cols(stacked_rolls.columns)
+        stacked_rolls.plot(kind="bar", stacked=True, ax=ax2, color=cols2)
+        ax2.set_title(f"Rollen pro Aufgabe und Schicht am {target_day.strftime('%d.%m.%Y')}")
+        ax2.set_xlabel("Aufgabe")
+        ax2.set_ylabel("Rollen")
+        ax2.set_xticks(range(len(task_order_rolls)))
+        ax2.set_xticklabels([t.capitalize() for t in task_order_rolls], rotation=60, ha="right")
+        leg2 = ax2.legend(loc="upper left", bbox_to_anchor=(1.02, 1))
+        if leg2:
+            for t in leg2.get_texts():
+                txt = t.get_text()
+                if txt in stacked_rolls.columns:
+                    t.set_color(shift_color_map.get(txt, "#000"))
+        figs.append(fig2)
+    else:
+        fig2, ax2 = plt.subplots(figsize=(12,3))
+        ax2.text(0.5, 0.5, "Keine Rollen-Daten für diesen Tag.", ha='center', va='center')
+        ax2.axis('off')
+        figs.append(fig2)
 
     return figs
 
@@ -289,4 +334,3 @@ if uploaded_file:
                 figs = plot_daily_charts(df_raw, angaben_df, day_date)
                 for fig in figs:
                     st.pyplot(fig)
-
