@@ -170,6 +170,31 @@ def classify_task_group(metric: str) -> str:
     return "Sonstige"
 
 
+def _latest_full_week_start(df: pd.DataFrame, as_of_date=None):
+    """Return the last eligible week start, excluding future and current partial weeks."""
+    rolls = _roll_rows(df)
+    active_rolls = (
+        rolls.groupby("Datum", observed=False)["Value"]
+        .sum()
+        .loc[lambda s: s > 0]
+    )
+    if active_rolls.empty:
+        return None
+
+    latest_active_date = pd.Timestamp(active_rolls.index.max()).normalize()
+    latest_active_week = latest_active_date - pd.Timedelta(days=latest_active_date.weekday())
+
+    as_of = pd.Timestamp.today().normalize() if as_of_date is None else pd.Timestamp(as_of_date).normalize()
+    current_week_start = as_of - pd.Timedelta(days=as_of.weekday())
+    latest_completed_workweek = (
+        current_week_start
+        if as_of.weekday() >= 4
+        else current_week_start - pd.Timedelta(days=7)
+    )
+
+    return min(latest_active_week, latest_completed_workweek)
+
+
 def _reindex_shift(df: pd.DataFrame, weekdays: pd.DatetimeIndex) -> pd.DataFrame:
     """Helper to reindex by shift and weekdays consistently."""
     return (
@@ -473,12 +498,19 @@ def aggregate_monthly(summary_long: pd.DataFrame, target_year: int, target_month
 
 
 @st.cache_data(show_spinner=False)
-def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = None, minutes_col: str = None):
+def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = None,
+                       minutes_col: str = None, as_of_date=None):
     """Aggregate weekly trend structures across the full available history."""
     df = filter_summary(summary_long)
     if df.empty:
         return {}
     df["WeekStart"] = df["Datum"] - pd.to_timedelta(df["Datum"].dt.weekday, unit="D")
+    cutoff_week_start = _latest_full_week_start(df, as_of_date)
+    if cutoff_week_start is None:
+        return {}
+    df = df[df["WeekStart"] <= cutoff_week_start].copy()
+    if df.empty:
+        return {}
     week_index = pd.date_range(df["WeekStart"].min(), df["WeekStart"].max(), freq="W-MON")
     rolls = _roll_rows(df)
     total_rolls_week = (
@@ -550,6 +582,7 @@ def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = No
     return {
         "df": df,
         "weeks": total_rolls_week.index,
+        "cutoff_week_start": cutoff_week_start,
         "total_rolls_week": total_rolls_week,
         "workers_week": workers_week,
         "rolls_per_ma": rolls_per_ma,
