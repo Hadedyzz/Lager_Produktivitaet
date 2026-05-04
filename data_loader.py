@@ -18,6 +18,7 @@ ALL_MONTHS = [
     "November",
     "Dezember",
 ]
+MONTH_NUMBER = {month: index + 1 for index, month in enumerate(ALL_MONTHS)}
 
 logger = logging.getLogger(__name__)
 
@@ -46,6 +47,12 @@ def _find_column_case_insensitive(columns, expected_name):
         if str(col).strip().lower() == expected_name.lower():
             return col
     return None
+
+
+def _parse_excel_date(value):
+    if pd.isna(value) or str(value).strip() == "":
+        return pd.NaT
+    return pd.to_datetime(value, errors="coerce", dayfirst=True)
 
 
 def _validate_angaben(angaben_df):
@@ -185,6 +192,8 @@ def load_excel(file):
         # ---------------- Load all month sheets ----------------
         records = []
         empty_months = []
+        skipped_date_columns = []
+        invalid_date_headers = []
 
         for month in month_sheets:
             try:
@@ -200,6 +209,7 @@ def load_excel(file):
             # Extract column headers (dates)
             try:
                 dates = raw.iloc[0, 1:].tolist()
+                parsed_dates = [_parse_excel_date(date_value) for date_value in dates]
             except Exception:
                 continue
 
@@ -235,14 +245,21 @@ def load_excel(file):
                         continue
                     for col in range(1, block.shape[1]):
                         datum = dates[col - 1]
+                        parsed_date = parsed_dates[col - 1] if col - 1 < len(parsed_dates) else pd.NaT
                         team = teams[col - 1]
                         schicht = schichten[col - 1]
                         value = block.iloc[kpi_row, col]
                         if pd.isna(datum) or str(datum).strip() == "":
                             continue
+                        if pd.isna(parsed_date):
+                            invalid_date_headers.append((month, col, datum))
+                            continue
+                        if parsed_date.month != MONTH_NUMBER[month]:
+                            skipped_date_columns.append((month, col, parsed_date.strftime("%d.%m.%Y")))
+                            continue
                         records.append(
                             {
-                                "Datum": datum,
+                                "Datum": parsed_date,
                                 "Team": team,
                                 "Schicht": schicht,
                                 "Metric": kpi_name.strip().lower(),  # normalize
@@ -253,6 +270,24 @@ def load_excel(file):
 
         if empty_months and len(empty_months) < len(month_sheets):
             st.info("Leere Monatstabellen wurden übersprungen: " + ", ".join(empty_months))
+
+        if invalid_date_headers:
+            unique_invalid = list(dict.fromkeys(
+                f"{month} Spalte {col}: {datum}" for month, col, datum in invalid_date_headers
+            ))
+            st.warning(
+                "Einige Datumsspalten konnten nicht gelesen werden und wurden übersprungen: "
+                + " | ".join(unique_invalid[:8])
+            )
+
+        if skipped_date_columns:
+            unique_skipped = list(dict.fromkeys(
+                f"{month} Spalte {col}: {date_value}" for month, col, date_value in skipped_date_columns
+            ))
+            st.info(
+                "Datumsspalten außerhalb des jeweiligen Monats wurden übersprungen: "
+                + " | ".join(unique_skipped[:8])
+            )
 
         if not records:
             st.error("Keine verwertbaren Daten in den Monatstabellen gefunden. Bitte prüfen Sie Datumszeile, Teamzeile, Schichtzeile und KPI-Blöcke.")
@@ -278,13 +313,27 @@ def load_excel(file):
             .str.lower()
         )
 
+        duplicate_keys = (
+            df_long.groupby(["Datum", "Team", "Schicht", "Metric"], observed=False)
+            .size()
+            .loc[lambda s: s > 1]
+        )
+        if not duplicate_keys.empty:
+            sample = []
+            for datum, team, schicht, metric in duplicate_keys.head(5).index:
+                sample.append(f"{datum.strftime('%d.%m.%Y')} / {team} / {schicht} / {metric}")
+            st.warning(
+                "Mehrere Werte mit gleichem Datum, Team, Schicht und KPI wurden gefunden und summiert. "
+                "Bitte prüfen Sie doppelte Datumsspalten in Excel: " + " | ".join(sample)
+            )
+
         # ---------------- Pivot to wide ----------------
         df_wide = (
             df_long.pivot_table(
                 index=["Datum", "Team", "Schicht"],
                 columns="Metric",
                 values="Value",
-                aggfunc="first",
+                aggfunc="sum",
             )
             .reset_index()
         )
@@ -303,7 +352,7 @@ def load_excel(file):
             "kontrolle dmg/retouren": ["damaged bearbeitet", "retouren bearbeitet"],
             "packen paletten liegend": ["rollen auf palette liegend (rollenanzahl)"],
             "packen paletten stehend": ["rollen auf palette stehend (rollenanzahl)"],
-            "souscouche abladen": ["souscouche abgeladen (rollen)"],
+            "souscouche abladen": ["souscouche abgeladen(rollen)", "souscouche abgeladen (rollen)"],
             "serbien abladen": ["entladen serbien"],
             "serbien abladen tautliner": ["entladen serbien tautliner"],
             "serbien einlagern": ["serbien rollen eingelagert"],
