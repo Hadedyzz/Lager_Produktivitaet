@@ -3,7 +3,8 @@
 # =========================
 # General chart settings
 # =========================
-DPI = 96  # consistent sharpness for all charts
+DPI = 96  # cloud-friendly sharpness for all charts
+SAVEFIG_DPI = 150
 
 # Whether to show average line across charts
 SHOW_AVERAGE_LINE = True
@@ -36,6 +37,22 @@ SHIFT_COLORS = {
 # Targets (e.g., Sägen per day)
 # =========================
 SAEGEN_TARGET = 70  # daily target for Sägen (used in weekly plots)
+
+ALL_GERMAN_MONTHS = [
+    "Januar",
+    "Februar",
+    "März",
+    "April",
+    "Mai",
+    "Juni",
+    "Juli",
+    "August",
+    "September",
+    "Oktober",
+    "November",
+    "Dezember",
+]
+MONTH_NUMBER = {month: index + 1 for index, month in enumerate(ALL_GERMAN_MONTHS)}
 
 # =========================
 # Annotation policy
