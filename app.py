@@ -305,7 +305,12 @@ with tab_month:
 with tab_long:
     context_key = make_context_key(uploaded_file, "Langzeit", datetime(1900, 1, 1))
     with st.spinner("Daten werden analysiert..."):
-        longterm_data = aggregate_longterm(summary_long, angaben_df, minutes_col)
+        longterm_data = aggregate_longterm(
+            summary_long,
+            angaben_df,
+            minutes_col,
+            as_of_date=pd.Timestamp.today().normalize(),
+        )
     if not longterm_data:
         _render_empty("Keine Langzeitdaten verfügbar.")
     else:
