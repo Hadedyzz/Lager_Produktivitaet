@@ -61,6 +61,8 @@ def plot_daily_charts(daily_data: dict, target_day):
         # Plot
         shift_colors = [SHIFT_COLORS.get(shift, "#cccccc") for shift in stacked_df.columns]
         stacked_df.plot(kind="bar", stacked=True, ax=ax, color=shift_colors)
+        ax.set_xticks(range(len(stacked_df.index)))
+        ax.set_xlim(-0.5, len(stacked_df.index) - 0.5)
 
         # Set ymax
         max_value = stacked_df.sum(axis=1).max()
@@ -139,6 +141,8 @@ def plot_daily_charts(daily_data: dict, target_day):
 
         shift_colors_rolls = [SHIFT_COLORS.get(shift, "#cccccc") for shift in stacked_rolls_df.columns]
         stacked_rolls_df.plot(kind="bar", stacked=True, ax=ax, color=shift_colors_rolls)
+        ax.set_xticks(range(len(stacked_rolls_df.index)))
+        ax.set_xlim(-0.5, len(stacked_rolls_df.index) - 0.5)
 
         # Set ymax
         max_value = stacked_rolls_df.sum(axis=1).max()
