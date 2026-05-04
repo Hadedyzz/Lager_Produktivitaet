@@ -1,6 +1,7 @@
 import io
 import zipfile
 import streamlit as st
+from config import SAVEFIG_DPI
 
 
 def _ensure_selection_state(context_key: str, figs_meta):
@@ -38,7 +39,7 @@ def _figs_to_zip(figs_meta, selection_dict):
 
             # Render fig to PNG
             png_buf = io.BytesIO()
-            fig.savefig(png_buf, format="png", dpi=300, bbox_inches="tight")
+            fig.savefig(png_buf, format="png", dpi=SAVEFIG_DPI, bbox_inches="tight")
             png_buf.seek(0)
 
             zipf.writestr(filename, png_buf.read())
@@ -57,6 +58,16 @@ def render_download_section(figs_meta, context_key: str, zip_name: str = None):
     selection_dict = st.session_state[selection_key]
 
     st.caption("Wählen Sie die Diagramme aus, die in der ZIP-Datei enthalten sein sollen.")
+    master_key = f"dl_master_{context_key}"
+    previous_master_key = f"{master_key}_previous"
+    default_master = all(selection_dict.values())
+    select_all = st.checkbox("Alle auswählen", value=default_master, key=master_key)
+    previous_master = st.session_state.get(previous_master_key)
+    if previous_master is not None and previous_master != select_all:
+        for title in selection_dict:
+            selection_dict[title] = select_all
+    st.session_state[previous_master_key] = select_all
+
     for item in figs_meta:
         title = item["title"]
         checkbox_key = f"dl_{context_key}_{item.get('filename', title)}"
