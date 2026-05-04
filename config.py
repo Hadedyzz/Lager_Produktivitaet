@@ -3,7 +3,7 @@
 # =========================
 # General chart settings
 # =========================
-DPI = 120  # consistent sharpness for all charts
+DPI = 96  # consistent sharpness for all charts
 
 # Whether to show average line across charts
 SHOW_AVERAGE_LINE = True
