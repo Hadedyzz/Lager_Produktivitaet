@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 
 from config import ALL_GERMAN_MONTHS, MONTH_NUMBER, SHIFT_ORDER
+from notifications import add_message
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,8 @@ def _validate_angaben(angaben_df):
             break
     if minutes_col is None and len(angaben_df.columns) > 1:
         minutes_col = angaben_df.columns[1]
-        st.warning(
+        add_message(
+            "warning",
             f"Keine eindeutige Minuten-Spalte in 'Angaben' gefunden. "
             f"Die App verwendet '{minutes_col}' als Vorgabe-Minuten."
         )
@@ -147,7 +149,8 @@ def _validate_angaben(angaben_df):
     missing_minutes = angaben_df[minutes_col].isna()
     if missing_minutes.any():
         missing_tasks = ", ".join(angaben_df.loc[missing_minutes, "Task"].head(8).tolist())
-        st.warning(
+        add_message(
+            "warning",
             "Einige Aufgaben in 'Angaben' haben keine numerische Vorgabe-Minuten. "
             f"Diese werden mit 0 Minuten gerechnet: {missing_tasks}"
         )
@@ -172,7 +175,7 @@ def _warn_metric_matching_issues(df_wide, metric_sources):
         "Betroffene Zuordnungen: " + " | ".join(missing[:8])
     )
     logger.warning(msg)
-    st.warning(msg)
+    add_message("warning", msg)
 
 
 def _warn_relevant_metric_matching_issues(df_wide, metric_sources, angaben_tasks):
@@ -194,7 +197,7 @@ def _warn_relevant_metric_matching_issues(df_wide, metric_sources, angaben_tasks
         + " | ".join(missing[:8])
     )
     logger.warning(msg)
-    st.warning(msg)
+    add_message("warning", msg)
 
 
 @st.cache_data(show_spinner=False)
@@ -245,7 +248,7 @@ def load_excel(file):
             try:
                 raw = _read_sheet_with_decimal_retry(xls, month, header=None)
             except Exception as e:
-                st.warning(f"Das Tabellenblatt '{month}' konnte nicht gelesen werden und wird übersprungen. Details: {e}")
+                add_message("warning", f"Das Tabellenblatt '{month}' konnte nicht gelesen werden und wird übersprungen. Details: {e}")
                 continue
 
             if raw.empty or raw.isna().all().all():
@@ -276,7 +279,8 @@ def load_excel(file):
                 if block.empty:
                     continue
                 if block.shape[0] < 3:
-                    st.warning(
+                    add_message(
+                        "warning",
                         f"Ein Datenblock in '{month}' hat zu wenige Zeilen "
                         "für Team, Schicht und KPI-Werte und wird übersprungen."
                     )
@@ -315,13 +319,14 @@ def load_excel(file):
                 i += 1
 
         if empty_months and len(empty_months) < len(month_sheets):
-            st.info("Leere Monatstabellen wurden übersprungen: " + ", ".join(empty_months))
+            add_message("info", "Leere Monatstabellen wurden übersprungen: " + ", ".join(empty_months))
 
         if invalid_date_headers:
             unique_invalid = list(dict.fromkeys(
                 f"{month} Spalte {col}: {datum}" for month, col, datum in invalid_date_headers
             ))
-            st.warning(
+            add_message(
+                "warning",
                 "Einige Datumsspalten konnten nicht gelesen werden und wurden übersprungen: "
                 + " | ".join(unique_invalid[:8])
             )
@@ -330,7 +335,8 @@ def load_excel(file):
             unique_skipped = list(dict.fromkeys(
                 f"{month} Spalte {col}: {date_value}" for month, col, date_value in skipped_date_columns
             ))
-            st.info(
+            add_message(
+                "info",
                 "Datumsspalten außerhalb des jeweiligen Monats wurden übersprungen: "
                 + " | ".join(unique_skipped[:8])
             )
@@ -345,7 +351,7 @@ def load_excel(file):
         df_long["Datum"] = pd.to_datetime(df_long["Datum"], errors="coerce", dayfirst=True)
         invalid_dates = df_long["Datum"].isna().sum()
         if invalid_dates:
-            st.info(f"{invalid_dates} Datensätze ohne gültiges Datum wurden ignoriert.")
+            add_message("info", f"{invalid_dates} Datensätze ohne gültiges Datum wurden ignoriert.")
             df_long = df_long[df_long["Datum"].notna()].copy()
         if df_long.empty:
             st.error("Nach der Datumsprüfung sind keine gültigen Monatstabellen-Daten übrig.")
@@ -363,7 +369,8 @@ def load_excel(file):
             sample = []
             for datum, team, schicht, metric in duplicate_keys.head(5).index:
                 sample.append(f"{datum.strftime('%d.%m.%Y')} / {team} / {schicht} / {metric}")
-            st.warning(
+            add_message(
+                "warning",
                 "Mehrere Werte mit gleichem Datum, Team, Schicht und KPI wurden gefunden und summiert. "
                 "Bitte prüfen Sie doppelte Datumsspalten in Excel: " + " | ".join(sample)
             )
@@ -409,11 +416,10 @@ def load_excel(file):
         )
         if ignored_metrics:
             logger.info("Unknown KPI metrics skipped: %s", ignored_metrics)
-            with st.expander("⚠️ Unbekannte KPIs übersprungen"):
-                st.write(
-                    "Diese KPI-Zeilen wurden eingelesen, aber keiner berechneten Kennzahl zugeordnet:"
-                )
-                st.write(", ".join(ignored_metrics))
+            add_message(
+                "info",
+                "Unbekannte KPIs übersprungen: " + ", ".join(ignored_metrics)
+            )
 
         for derived_metric, source_metrics in metric_sources.items():
             summary_df[derived_metric] = sum(safe_get(df_wide, source) for source in source_metrics)

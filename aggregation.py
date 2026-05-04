@@ -3,6 +3,7 @@ import logging
 import pandas as pd
 import streamlit as st
 from config import SAEGEN_TARGET
+from notifications import add_message
 
 SHIFT_ORDER = ["Früh", "Spät", "Nacht"]
 MA_KPIS = ["vorhandene ma", "benötigte ma", "differenz ma"]
@@ -168,6 +169,44 @@ def classify_task_group(metric: str) -> str:
     if m.startswith("zusammenfahren"):
         return "Zusammenfahren"
     return "Sonstige"
+
+
+def _task_time_share_by_period(df: pd.DataFrame, angaben_df: pd.DataFrame,
+                               minutes_col: str, period_col: str,
+                               period_index: pd.DatetimeIndex) -> pd.DataFrame:
+    """Return percent time allocation by task group for a weekly/monthly period."""
+    if angaben_df is None or not minutes_col or minutes_col not in angaben_df.columns:
+        return pd.DataFrame(index=period_index, columns=TASK_ORDER).fillna(0)
+
+    task_values = _roll_rows(df).groupby([period_col, "Metric"], observed=False)["Value"].sum().reset_index()
+    if task_values.empty:
+        return pd.DataFrame(index=period_index, columns=TASK_ORDER).fillna(0)
+
+    angaben = angaben_df.copy()
+    angaben["Task"] = angaben["Task"].astype(str).str.strip().str.lower()
+    task_hours = task_values.merge(angaben[["Task", minutes_col]], left_on="Metric", right_on="Task", how="left")
+    task_hours[minutes_col] = pd.to_numeric(task_hours[minutes_col], errors="coerce").fillna(0)
+    task_hours["Hours"] = task_hours["Value"] * task_hours[minutes_col] / 60
+    task_hours["TaskGroup"] = task_hours["Metric"].apply(classify_task_group)
+    task_hours = task_hours[[period_col, "TaskGroup", "Hours"]]
+
+    sonstiges = (
+        df[df["Metric"].eq(SONSTIGES)]
+        .groupby(period_col, observed=False)["Value"]
+        .sum()
+        .reset_index(name="Hours")
+    )
+    if not sonstiges.empty:
+        sonstiges["TaskGroup"] = "Sonstige"
+        task_hours = pd.concat([task_hours, sonstiges[[period_col, "TaskGroup", "Hours"]]], ignore_index=True)
+
+    hours = (
+        task_hours.groupby([period_col, "TaskGroup"], observed=False)["Hours"].sum()
+        .unstack("TaskGroup")
+        .reindex(index=period_index, columns=TASK_ORDER)
+        .fillna(0)
+    )
+    return hours.div(hours.sum(axis=1).replace(0, float("nan")), axis=0).mul(100).fillna(0).astype(float)
 
 
 def _latest_full_week_start(df: pd.DataFrame, as_of_date=None):
@@ -342,7 +381,7 @@ def aggregate_daily(summary_long: pd.DataFrame, angaben_df: pd.DataFrame,
             + ", ".join(unmatched)
         )
         logger.warning(msg)
-        st.warning(msg)
+        add_message("warning", msg)
 
     # Task-level Hours & FTE
     if minutes_col and minutes_col in shift_task_merged.columns:
@@ -436,6 +475,18 @@ def aggregate_monthly(summary_long: pd.DataFrame, target_year: int, target_month
         .groupby("Datum", observed=False)["Value"].sum()
         .reindex(workdays).fillna(0)
     )
+    needed_workers_per_day = (
+        df[df["Metric"].eq("benötigte ma")]
+        .groupby("Datum", observed=False)["Value"].sum()
+        .reindex(workdays).fillna(0)
+    )
+    ma_by_day_shift = (
+        df[df["Metric"].eq("vorhandene ma")]
+        .groupby(["Datum", "Schicht"], observed=False)["Value"].sum()
+        .unstack("Schicht")
+        .reindex(index=workdays, columns=SHIFT_ORDER)
+        .fillna(0)
+    )
     if total_rolls_per_day.sum() == 0 and workers_per_day.sum() == 0:
         return {}
     rolls_per_shift = rolls.groupby("Schicht", observed=False)["Value"].sum()
@@ -486,6 +537,9 @@ def aggregate_monthly(summary_long: pd.DataFrame, target_year: int, target_month
         "df": df,
         "total_rolls_per_day": total_rolls_per_day,
         "workers_per_day": workers_per_day,
+        "needed_workers_per_day": needed_workers_per_day,
+        "ma_by_day_shift": ma_by_day_shift,
+        "rolls_per_ma_per_day": rpm,
         "rolls_per_ma_by_shift": rolls_per_ma_by_shift,
         "saegen": saegen,
         "staffing": staffing,
@@ -512,6 +566,8 @@ def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = No
     if df.empty:
         return {}
     week_index = pd.date_range(df["WeekStart"].min(), df["WeekStart"].max(), freq="W-MON")
+    df["MonthStart"] = df["Datum"].dt.to_period("M").dt.to_timestamp()
+    month_index = pd.date_range(df["MonthStart"].min(), df["MonthStart"].max(), freq="MS")
     rolls = _roll_rows(df)
     total_rolls_week = (
         rolls.groupby("WeekStart", observed=False)["Value"]
@@ -528,7 +584,31 @@ def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = No
         .fillna(0)
         .sort_index()
     )
+    needed_workers_week = (
+        df[df["Metric"].eq("benötigte ma")]
+        .groupby("WeekStart", observed=False)["Value"]
+        .sum()
+        .reindex(week_index)
+        .fillna(0)
+        .sort_index()
+    )
     rolls_per_ma = total_rolls_week.div(workers_week.replace(0, float("nan"))).fillna(0).astype(float)
+    verladen_week = (
+        df[df["Metric"].eq("verladen")]
+        .groupby("WeekStart", observed=False)["Value"]
+        .sum()
+        .reindex(week_index)
+        .fillna(0)
+        .sort_index()
+    )
+    verladen_month = (
+        df[df["Metric"].eq("verladen")]
+        .groupby("MonthStart", observed=False)["Value"]
+        .sum()
+        .reindex(month_index)
+        .fillna(0)
+        .sort_index()
+    )
     saegen_daily = (
         df[df["Metric"].str.contains("sägen", case=False, na=False)]
         .groupby(["WeekStart", "Datum"], observed=False)["Value"]
@@ -541,13 +621,6 @@ def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = No
         .reindex(week_index)
         .fillna(0)
     )
-    staffing_by_shift = (
-        df[df["Metric"].eq("benötigte ma")]
-        .groupby(["WeekStart", "Schicht"], observed=False)["Value"].sum()
-        .unstack("Schicht")
-        .reindex(index=week_index, columns=SHIFT_ORDER)
-        .fillna(0)
-    )
     task = rolls.copy()
     task["TaskGroup"] = task["Metric"].apply(classify_task_group)
     task_trends = (
@@ -558,39 +631,21 @@ def aggregate_longterm(summary_long: pd.DataFrame, angaben_df: pd.DataFrame = No
     )
     base = task_trends.replace(0, float("nan")).head(4).mean().replace(0, float("nan"))
     task_indexed = task_trends.div(base).mul(100).fillna(0).astype(float)
-    ma_by_shift = (
-        df[df["Metric"].eq("vorhandene ma")]
-        .groupby(["WeekStart", "Schicht"], observed=False)["Value"].sum()
-        .unstack("Schicht")
-        .reindex(index=week_index, columns=SHIFT_ORDER)
-        .fillna(0)
-    )
-    shift_share = ma_by_shift.div(ma_by_shift.sum(axis=1).replace(0, float("nan")), axis=0).fillna(0).astype(float)
-    shift_rolls = rolls.groupby(["WeekStart", "Datum", "Schicht"], observed=False)["Value"].sum()
-    shift_ma = df[df["Metric"].eq("vorhandene ma")].groupby(["WeekStart", "Datum", "Schicht"], observed=False)["Value"].sum()
-    shift_rpm = shift_rolls.div(shift_ma.replace(0, float("nan"))).dropna().astype(float).reset_index(name="rolls_per_ma")
-    shift_rpm["Weekday"] = shift_rpm["Datum"].dt.day_name()
-    heatmap = shift_rpm.pivot_table(
-        index="WeekStart",
-        columns="Weekday",
-        values="rolls_per_ma",
-        aggfunc=compute_volatility,
-        fill_value=0,
-    )
-    weekday_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
-    heatmap = heatmap.reindex(index=week_index, columns=[c for c in weekday_order if c in heatmap.columns]).fillna(0)
+    task_time_share_week = _task_time_share_by_period(df, angaben_df, minutes_col, "WeekStart", week_index)
+    task_time_share_month = _task_time_share_by_period(df, angaben_df, minutes_col, "MonthStart", month_index)
     return {
         "df": df,
         "weeks": total_rolls_week.index,
         "cutoff_week_start": cutoff_week_start,
         "total_rolls_week": total_rolls_week,
         "workers_week": workers_week,
+        "needed_workers_week": needed_workers_week,
         "rolls_per_ma": rolls_per_ma,
+        "verladen_week": verladen_week,
+        "verladen_month": verladen_month,
         "saegen_week": saegen_week,
-        "staffing_by_shift": staffing_by_shift,
         "task_trends": task_trends,
         "task_indexed": task_indexed,
-        "shift_share": shift_share,
-        "volatility_heatmap": heatmap,
-        "volatility": compute_volatility(rolls_per_ma[rolls_per_ma > 0]),
+        "task_time_share_week": task_time_share_week,
+        "task_time_share_month": task_time_share_month,
     }

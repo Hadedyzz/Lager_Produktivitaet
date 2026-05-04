@@ -17,6 +17,13 @@ def _previous_month_percent_lookup(previous_month_data: dict | None):
     return dict(zip(previous["Metric"], previous["Percent"]))
 
 
+def _day_axis(index):
+    dates = pd.to_datetime(index)
+    x = list(range(len(dates)))
+    labels = [day.strftime("%d.%m") for day in dates]
+    return x, labels
+
+
 def plot_monthly_charts(monthly_data: dict, previous_month_data: dict | None = None):
     """Create monthly leadership charts from aggregate_monthly output."""
     figs_meta = []
@@ -28,6 +35,25 @@ def plot_monthly_charts(monthly_data: dict, previous_month_data: dict | None = N
     month = int(start.month)
     label = start.strftime("%Y-%m")
     previous_percent = _previous_month_percent_lookup(previous_month_data)
+
+    rpm = monthly_data.get("rolls_per_ma_per_day", pd.Series(dtype=float))
+    if rpm is not None and not rpm.empty:
+        active_rpm = rpm[rpm > 0]
+        fig, ax = plt.subplots(figsize=(12, 5), dpi=DPI)
+        x, labels = _day_axis(rpm.index)
+        ax.plot(x, rpm.values, marker="o", linewidth=2.5, color="#1f77b4", label="Rollen/MA")
+        if not active_rpm.empty:
+            avg = float(active_rpm.mean())
+            ax.axhline(avg, color="#222222", linestyle="--", linewidth=1.8, label=f"Monatsmittel {avg:.1f}")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45)
+        ax.set_xlim(-0.5, len(rpm) - 0.5)
+        ax.set_ylim(0, max(float(rpm.max()) * 1.15, 1))
+        ax.set_title(f"Produktivität - Rollen pro MA ({label})")
+        ax.set_ylabel("Rollen pro MA")
+        ax.legend()
+        title = f"Monatsanalyse - Produktivität Rollen pro MA ({label})"
+        figs_meta.append({"title": title, "filename": sanitize_filename(title), "fig": fig})
 
     daily_saegen = monthly_data["saegen"].get("daily", pd.Series(dtype=float))
     if not daily_saegen.empty:
@@ -90,36 +116,69 @@ def plot_monthly_charts(monthly_data: dict, previous_month_data: dict | None = N
         title = f"Monatsanalyse - Zeitanteile ({label})"
         figs_meta.append({"title": title, "filename": sanitize_filename(title), "fig": fig})
 
-    staffing = monthly_data.get("staffing", {})
-    gap = staffing.get("daily", pd.Series(dtype=float))
-    if not gap.empty:
-        fig, ax = plt.subplots(figsize=(10, 5), dpi=DPI)
-        ax.hist(gap.values, bins=min(10, max(3, len(gap))), color="#1f77b4", edgecolor="white")
-        ax.axvline(0, color="black", linewidth=2, label="Ziel")
-        ax.axvline(-2, color="red", linestyle="--", label="-2 MA")
-        ax.axvline(2, color="green", linestyle="--", label="+2 MA")
-        in_band = (gap.abs() <= 2).mean() * 100
-        ax.set_title(f"Verteilung Δ MA ({label}) - {in_band:.0f}% im akzeptablen Bereich")
-        ax.set_xlabel("Differenz MA")
-        ax.set_ylabel("Arbeitstage")
-        ax.legend()
-        title = f"Monatsanalyse - Differenz MA ({label})"
+    needed_ma = monthly_data.get("needed_workers_per_day", pd.Series(dtype=float))
+    available_ma = monthly_data.get("workers_per_day", pd.Series(dtype=float))
+    if needed_ma is not None and available_ma is not None and not available_ma.empty:
+        needed_ma = needed_ma.reindex(available_ma.index).fillna(0)
+        fig, ax = plt.subplots(figsize=(12, 5), dpi=DPI)
+        x, labels = _day_axis(available_ma.index)
+        available_values = available_ma.astype(float).values
+        needed_values = needed_ma.astype(float).values
+        ax.plot(x, needed_values, marker="o", linewidth=2.5, color="#d62728", label="Gerechnete MA")
+        ax.plot(x, available_values, marker="o", linewidth=2.5, color="#2ca02c", label="Vorhandene MA")
+        ax.fill_between(
+            x,
+            needed_values,
+            available_values,
+            where=available_values >= needed_values,
+            interpolate=True,
+            color="#2ca02c",
+            alpha=0.18,
+            label="Reserve",
+        )
+        ax.fill_between(
+            x,
+            needed_values,
+            available_values,
+            where=available_values < needed_values,
+            interpolate=True,
+            color="#d62728",
+            alpha=0.20,
+            label="Unterdeckung",
+        )
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45)
+        ax.set_xlim(-0.5, len(available_ma) - 0.5)
+        ax.set_ylim(0, max(float(available_ma.max()), float(needed_ma.max()), 1) * 1.15)
+        ax.set_title(f"Gerechnete MA vs. vorhandene MA ({label})")
+        ax.set_ylabel("MA")
+        ax.legend(ncol=2)
+        title = f"Monatsanalyse - Gerechnete vs vorhandene MA ({label})"
         figs_meta.append({"title": title, "filename": sanitize_filename(title), "fig": fig})
 
-    rpm_shift = monthly_data.get("rolls_per_ma_by_shift")
-    if rpm_shift is not None and not rpm_shift.empty:
-        rpm_shift = rpm_shift.sort_values(ascending=True)
-        fig, ax = plt.subplots(figsize=(9, 5), dpi=DPI)
-        colors = [SHIFT_COLORS.get(shift, "#cccccc") for shift in rpm_shift.index]
-        ax.barh(range(len(rpm_shift)), rpm_shift.values, color=colors)
-        ax.set_yticks(range(len(rpm_shift)))
-        ax.set_yticklabels(rpm_shift.index)
-        ax.set_xlim(0, max(rpm_shift.max() * 1.15, 1))
-        ax.set_title(f"Rollen pro MA nach Schicht ({label})")
-        ax.set_xlabel("Rollen pro MA")
-        for i, value in enumerate(rpm_shift.values):
-            ax.text(value, i, f" {value:.1f}", va="center", fontweight="bold")
-        title = f"Monatsanalyse - Rollen pro MA nach Schicht ({label})"
+    ma_by_day_shift = monthly_data.get("ma_by_day_shift")
+    if ma_by_day_shift is not None and not ma_by_day_shift.empty:
+        fig, ax = plt.subplots(figsize=(12, 5), dpi=DPI)
+        x, labels = _day_axis(ma_by_day_shift.index)
+        bottom = pd.Series(0.0, index=ma_by_day_shift.index)
+        for shift in ma_by_day_shift.columns:
+            values = ma_by_day_shift[shift].astype(float)
+            ax.bar(
+                x,
+                values.values,
+                bottom=bottom.values,
+                label=shift,
+                color=SHIFT_COLORS.get(shift, "#cccccc"),
+            )
+            bottom = bottom.add(values, fill_value=0)
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45)
+        ax.set_xlim(-0.5, len(ma_by_day_shift.index) - 0.5)
+        ax.set_ylim(0, max(float(bottom.max()) * 1.15, 1))
+        ax.set_title(f"MA pro Tag nach Schicht ({label})")
+        ax.set_ylabel("Vorhandene MA")
+        ax.legend(ncol=3)
+        title = f"Monatsanalyse - MA pro Tag ({label})"
         figs_meta.append({"title": title, "filename": sanitize_filename(title), "fig": fig})
 
     return figs_meta

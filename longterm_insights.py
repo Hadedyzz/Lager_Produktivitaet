@@ -49,10 +49,4 @@ def generate_longterm_insights(longterm_data: dict) -> list[str]:
             end = float(verladen.tail(1).iloc[0])
             insights.append(f"Verladen-Volumen ist {_pct_change(start, end):+.1f}% gegenüber dem Startniveau verändert.")
 
-    shift_share = longterm_data.get("shift_share")
-    if shift_share is not None and "Nacht" in shift_share and not shift_share.empty:
-        start_share = float(shift_share["Nacht"].iloc[0] * 100)
-        end_share = float(shift_share["Nacht"].iloc[-1] * 100)
-        insights.append(f"Nacht-Schicht-Anteil ist von {start_share:.1f}% auf {end_share:.1f}% verändert.")
-
     return [insight for insight in insights if insight]

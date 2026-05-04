@@ -20,11 +20,12 @@ from config import SAEGEN_TARGET, SAVEFIG_DPI
 from daily_plots import plot_daily_charts
 from data_loader import load_excel
 from download_utils import render_download_section
-from helpers import make_context_key
+from helpers import file_content_hash, make_context_key
 from kpi_header import render_kpi_header
 from longterm_insights import generate_longterm_insights
 from longterm_plots import plot_longterm_charts
 from monthly_plots import plot_monthly_charts
+from notifications import render_messages, reset_messages
 from weekly_plots import plot_weekly_charts
 
 
@@ -156,17 +157,18 @@ def _longterm_kpis(longterm_data):
     weeks = longterm_data.get("weeks", [])
     rpm = longterm_data.get("rolls_per_ma", pd.Series(dtype=float))
     saegen = longterm_data.get("saegen_week")
-    volatility = longterm_data.get("volatility", 0)
+    verladen_week = longterm_data.get("verladen_week", pd.Series(dtype=float))
     start = rpm.head(4).mean() if len(rpm) else 0
     end = rpm.tail(4).mean() if len(rpm) else 0
     trend = ((end - start) / start * 100) if start else 0
     saegen_start = saegen["mean"].head(4).mean() if saegen is not None and not saegen.empty else 0
     saegen_end = saegen["mean"].tail(4).mean() if saegen is not None and not saegen.empty else 0
+    avg_verladen = verladen_week[verladen_week > 0].mean() if len(verladen_week) else 0
     return [
         {"label": "Anzahl Wochen", "value": _fmt_number(len(weeks)), "delta": None},
         {"label": "Trend Rollen/MA", "value": f"{trend:+.1f}%", "delta": "letzte 4 vs erste 4 Wochen"},
         {"label": "Trend Sägen-Mittel", "value": _fmt_number(saegen_end, 1), "delta": f"{saegen_end - saegen_start:+.1f}"},
-        {"label": "Volatilität-Trend", "value": _fmt_number(volatility, 2), "delta": None},
+        {"label": "Ø Verladen/Woche", "value": _fmt_number(avg_verladen), "delta": None},
         {"label": "Auslastungs-Drift", "value": _fmt_number(end - start, 1), "delta": None},
     ]
 
@@ -190,6 +192,11 @@ with st.sidebar:
 if not uploaded_file:
     _render_empty("Bitte laden Sie eine Excel-Datei hoch, um die Analyse zu starten.")
     st.stop()
+
+uploaded_file_hash = file_content_hash(uploaded_file)
+if st.session_state.get("messages_file_hash") != uploaded_file_hash:
+    reset_messages()
+    st.session_state["messages_file_hash"] = uploaded_file_hash
 
 with st.spinner("Daten werden analysiert..."):
     df_raw, summary_long, angaben_df, minutes_col = load_excel(uploaded_file)
@@ -231,6 +238,8 @@ if not available_dates:
 min_date = pd.Timestamp(available_dates[0]).date()
 max_date = pd.Timestamp(available_dates[-1]).date()
 available_months = sorted(pd.Series(available_dates).dt.to_period("M").astype(str).unique())
+
+messages_container = st.container()
 
 tab_day, tab_week, tab_month, tab_long = st.tabs(["Tag", "Woche", "Monat", "Langzeit"])
 
@@ -298,7 +307,7 @@ with tab_month:
         if anomalies is None or anomalies.empty:
             st.info("Keine Anomalien gefunden.")
         else:
-            st.dataframe(anomalies, use_container_width=True)
+            st.dataframe(anomalies, width="stretch")
         if figs_meta:
             _render_chart_outputs(figs_meta, context_key, f"rollenbewegung_{period.year}-{period.month:02d}.zip")
 
@@ -325,3 +334,6 @@ with tab_long:
             figs_meta = []
         if figs_meta:
             _render_chart_outputs(figs_meta, context_key, "rollenbewegung_langzeit.zip")
+
+with messages_container:
+    render_messages()
