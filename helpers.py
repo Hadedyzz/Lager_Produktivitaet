@@ -1,7 +1,7 @@
 # helpers.py
 import re
 import hashlib
-from datetime import datetime
+from datetime import date, datetime
 import pandas as pd
 
 
@@ -30,28 +30,38 @@ def sanitize_filename(title: str) -> str:
     return safe[:80] + ".png"  # cap length, always end with .png
 
 
+def file_content_hash(file) -> str:
+    """Return a short stable hash for an uploaded file-like object."""
+    if file is None:
+        return ""
+
+    try:
+        pos = file.tell()
+        sha1 = hashlib.sha1()
+        for chunk in iter(lambda: file.read(8192), b""):
+            sha1.update(chunk)
+        file.seek(pos)
+        return sha1.hexdigest()[:10]
+    except Exception:
+        return "nofile"
+
+
 def make_context_key(file, mode: str, date_value: datetime) -> str:
     """
     Create a stable short hash for the current analysis context.
     Context is defined by (file content, mode, date).
     Used to persist checkbox selections across reruns.
     """
-    # file may be None or an uploaded file-like object
-    file_hash = ""
-    if file is not None:
-        try:
-            pos = file.tell()
-            content = file.read()
-            file.seek(pos)
-            file_hash = hashlib.sha1(content).hexdigest()[:10]
-        except Exception:
-            file_hash = "nofile"
+    file_hash = file_content_hash(file)
 
-    date_str = ""
     if isinstance(date_value, datetime):
+        date_str = date_value.strftime("%Y-%m-%d")
+    elif isinstance(date_value, date):
         date_str = date_value.strftime("%Y-%m-%d")
     elif date_value:
         date_str = str(date_value)
+    else:
+        date_str = ""
 
     raw = f"{file_hash}|{mode}|{date_str}"
     return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12]

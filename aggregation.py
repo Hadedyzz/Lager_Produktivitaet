@@ -1,10 +1,12 @@
-# aggregation.py
+import logging
+
 import pandas as pd
 import streamlit as st
 
 SHIFT_ORDER = ["Früh", "Spät", "Nacht"]
 MA_KPIS = ["vorhandene ma", "benötigte ma", "differenz ma"]
 SONSTIGES = "sonstiges / aufräumarbeiten (in std)"  # loader's Sonstiges
+logger = logging.getLogger(__name__)
 
 # Define Hauptaufgaben (main tasks) in lowercase to match loader normalization
 MAIN_TASKS = ["absetzen", "richten", "verladen", "zusammenfahren"]
@@ -164,6 +166,20 @@ def aggregate_daily(summary_long: pd.DataFrame, angaben_df: pd.DataFrame,
         right_on="Task",
         how="left"
     )
+
+    unmatched = shift_task_merged[
+        shift_task_merged["Task"].isna()
+        & ~shift_task_merged["Metric"].str.lower().str.strip().isin(MA_KPIS + [SONSTIGES])
+        & (shift_task_merged["Value"] != 0)
+    ]["Metric"].dropna().drop_duplicates().head(12).tolist()
+    if unmatched:
+        msg = (
+            "Einige Aufgaben aus den Monatstabellen konnten nicht mit 'Angaben' gematcht werden. "
+            "Die Stundenberechnung für diese Aufgaben ist 0. Bitte Schreibweise, Leerzeichen und Encoding/Umlaute prüfen: "
+            + ", ".join(unmatched)
+        )
+        logger.warning(msg)
+        st.warning(msg)
 
     # Task-level Hours & FTE
     if minutes_col and minutes_col in shift_task_merged.columns:
