@@ -16,6 +16,16 @@ from config import (
 TASK_ORDER = ["Absetzen", "Richten", "Verladen", "Zusammenfahren", "Sonstige"]
 
 
+def _with_day_labels(df):
+    """
+    Plot weekly DataFrames with string x labels so pandas/matplotlib
+    use stable 0..n bar positions across local and cloud versions.
+    """
+    plot_df = df.copy()
+    plot_df.index = format_day_month(plot_df.index)
+    return plot_df
+
+
 def _add_average_line(ax, values, x_positions, ymax, label_prefix="Durchschnitt"):
     """Helper to add average line + label if enabled in config."""
     if not SHOW_AVERAGE_LINE:
@@ -60,15 +70,17 @@ def plot_weekly_charts(weekly_data: dict, target_date):
     saegen_by_day_shift = weekly_data["saegen_by_day_shift"]
     if not saegen_by_day_shift.empty:
         fig, ax = plt.subplots(figsize=(12, 6), dpi=DPI)
-        saegen_by_day_shift.plot(
+        plot_df = _with_day_labels(saegen_by_day_shift)
+        plot_df.plot(
             kind="bar",
             stacked=True,
             ax=ax,
             color=[SHIFT_COLORS[s] for s in SHIFT_ORDER],
         )
         ax.set_title(f"Anzahl gesägte Rollen pro Tag (KW {kw})")
-        ax.set_xticks(range(len(dates)))
-        ax.set_xticklabels(format_day_month(dates), rotation=45)
+        ax.set_xticks(range(len(plot_df.index)))
+        ax.set_xticklabels(plot_df.index, rotation=45)
+        ax.set_xlim(-0.5, len(plot_df.index) - 0.5)
 
         ymax = max(saegen_by_day_shift.sum(axis=1).max(), SAEGEN_TARGET) * 1.2
         ax.set_ylim(0, ymax)
@@ -174,7 +186,8 @@ def plot_weekly_charts(weekly_data: dict, target_date):
         }
 
         fig, ax = plt.subplots(figsize=(12, 6), dpi=DPI)
-        total_rolls_by_group.plot(
+        plot_df = _with_day_labels(total_rolls_by_group)
+        plot_df.plot(
             kind="bar",
             stacked=True,
             ax=ax,
@@ -182,8 +195,9 @@ def plot_weekly_charts(weekly_data: dict, target_date):
         )
 
         ax.set_title(f"Gesamte Anzahl bewegter Rollen nach Aufgaben (KW {kw})")
-        ax.set_xticks(range(len(dates)))
-        ax.set_xticklabels(format_day_month(dates), rotation=45)
+        ax.set_xticks(range(len(plot_df.index)))
+        ax.set_xticklabels(plot_df.index, rotation=45)
+        ax.set_xlim(-0.5, len(plot_df.index) - 0.5)
 
         # Scale a bit lower
         ymax = max(total_rolls_by_group.sum(axis=1).max(), 1) * 1.2
@@ -271,7 +285,8 @@ def plot_weekly_charts(weekly_data: dict, target_date):
     total_shift = weekly_data["total_shift"]
     if not total_shift.empty:
         fig, ax = plt.subplots(figsize=(12, 6), dpi=DPI)
-        total_shift.plot(
+        plot_df = _with_day_labels(total_shift)
+        plot_df.plot(
             kind="bar",
             stacked=True,
             ax=ax,
@@ -279,8 +294,9 @@ def plot_weekly_charts(weekly_data: dict, target_date):
         )
 
         ax.set_title(f"Gesamte Anzahl bewegter Rollen nach Schicht (KW {kw})")
-        ax.set_xticks(range(len(dates)))
-        ax.set_xticklabels(format_day_month(dates), rotation=45)
+        ax.set_xticks(range(len(plot_df.index)))
+        ax.set_xticklabels(plot_df.index, rotation=45)
+        ax.set_xlim(-0.5, len(plot_df.index) - 0.5)
 
         # Scale a bit lower
         ymax = max(total_shift.sum(axis=1).max(), 1) * 1.2
@@ -385,6 +401,7 @@ def plot_weekly_charts(weekly_data: dict, target_date):
         ax.set_title(f"Gesamtrollen pro MA (KW {kw})")
         ax.set_xticks(range(len(norm.index)))
         ax.set_xticklabels(format_day_month(norm.index), rotation=45)
+        ax.set_xlim(-0.5, len(norm.index) - 0.5)
 
         # Scale consistent with others
         ymax = max(norm.values) * 1.2 if len(norm) > 0 else 1
@@ -433,7 +450,8 @@ def plot_weekly_charts(weekly_data: dict, target_date):
     ma_by_shift = weekly_data["ma_by_shift"]
     if not ma_by_shift.empty:
         fig, ax = plt.subplots(figsize=(12, 6), dpi=DPI)
-        ma_by_shift.plot(
+        plot_df = _with_day_labels(ma_by_shift)
+        plot_df.plot(
             kind="bar",
             stacked=True,
             ax=ax,
@@ -441,8 +459,9 @@ def plot_weekly_charts(weekly_data: dict, target_date):
         )
 
         ax.set_title(f"Anzahl MA pro Schicht (KW {kw})")
-        ax.set_xticks(range(len(dates)))
-        ax.set_xticklabels(format_day_month(dates), rotation=45)
+        ax.set_xticks(range(len(plot_df.index)))
+        ax.set_xticklabels(plot_df.index, rotation=45)
+        ax.set_xlim(-0.5, len(plot_df.index) - 0.5)
 
         # Scale similar to others
         ymax = max(ma_by_shift.sum(axis=1).max(), 1) * 1.2
