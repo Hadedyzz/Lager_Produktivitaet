@@ -1,12 +1,10 @@
 from datetime import datetime
 from typing import List, Dict
-# app.py (top of file) — add these lines BEFORE other imports that use matplotlib
+
 import matplotlib
 matplotlib.use("Agg")  # must come before importing matplotlib.pyplot anywhere
 matplotlib.rcParams["font.family"] = "DejaVu Sans"   # available on Linux, supports umlauts
 matplotlib.rcParams["figure.dpi"] = 96  # cloud-friendly default
-
-import streamlit as st
 
 # Your modules
 from data_loader import load_excel
@@ -48,11 +46,21 @@ def _render_weekly_kpi_header(weekly_data: dict):
     saegen_by_day_shift = weekly_data.get("saegen_by_day_shift")
 
     total_rolls = float(total_rolls_per_day.sum()) if total_rolls_per_day is not None else 0
-    active_days = int((total_rolls_per_day > 0).sum()) if total_rolls_per_day is not None else 0
+    if total_rolls_per_day is not None:
+        active_day_mask = total_rolls_per_day > 0
+        if not active_day_mask.any() and workers_per_day is not None:
+            active_day_mask = workers_per_day > 0
+        active_days = int(active_day_mask.sum())
+    else:
+        active_day_mask = None
+        active_days = 0
     avg_rolls_day = total_rolls / active_days if active_days else 0
 
     total_workers = float(workers_per_day.sum()) if workers_per_day is not None else 0
-    avg_workers_day = float(workers_per_day.mean()) if workers_per_day is not None and len(workers_per_day) else 0
+    if workers_per_day is not None and active_day_mask is not None and active_days:
+        avg_workers_day = float(workers_per_day.loc[active_day_mask].mean())
+    else:
+        avg_workers_day = 0
     rolls_per_ma = total_rolls / total_workers if total_workers else 0
 
     if saegen_by_day_shift is not None and not saegen_by_day_shift.empty:
