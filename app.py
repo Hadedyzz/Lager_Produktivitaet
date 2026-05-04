@@ -1,5 +1,7 @@
 from datetime import datetime
 from typing import List, Dict
+import matplotlib
+matplotlib.use("Agg")
 
 import streamlit as st
 
