@@ -1,29 +1,22 @@
 import logging
+import unicodedata
 
 import pandas as pd
 import streamlit as st
 
-SHIFT_ORDER = ["Früh", "Spät", "Nacht"]
-ALL_MONTHS = [
-    "Januar",
-    "Februar",
-    "März",
-    "April",
-    "Mai",
-    "Juni",
-    "Juli",
-    "August",
-    "September",
-    "Oktober",
-    "November",
-    "Dezember",
-]
-MONTH_NUMBER = {month: index + 1 for index, month in enumerate(ALL_MONTHS)}
+from config import ALL_GERMAN_MONTHS, MONTH_NUMBER, SHIFT_ORDER
 
 logger = logging.getLogger(__name__)
 
 def safe_get(df, col):
     return df[col].fillna(0) if col in df else pd.Series(0, index=df.index)
+
+
+def normalize_text(value) -> str:
+    """Normalize workbook labels before matching."""
+    if pd.isna(value):
+        return ""
+    return unicodedata.normalize("NFC", str(value)).strip().lower()
 
 
 def _empty_result(angaben_df=None, minutes_col=None):
@@ -44,9 +37,70 @@ def _read_sheet_with_decimal_retry(source, sheet_name, **kwargs):
 
 def _find_column_case_insensitive(columns, expected_name):
     for col in columns:
-        if str(col).strip().lower() == expected_name.lower():
+        if normalize_text(col) == normalize_text(expected_name):
             return col
     return None
+
+
+def _has_month_block_structure(raw: pd.DataFrame) -> bool:
+    if raw.empty or raw.shape[0] < 3 or raw.shape[1] < 2:
+        return False
+    has_date = pd.notna(_parse_excel_date(raw.iloc[0, 1]))
+    first_labels = [normalize_text(v) for v in raw.iloc[1:4, 0].tolist()]
+    return has_date and any("team" in label for label in first_labels) and any("schicht" in label for label in first_labels)
+
+
+def validate_workbook(xls):
+    """Validate workbook structure and return readable month sheet names."""
+    if "Angaben" not in xls.sheet_names:
+        st.error("Die Excel-Datei enthält kein Tabellenblatt 'Angaben'. Bitte laden Sie die richtige Vorlage hoch.")
+        return None
+
+    month_sheets = [sheet_name for sheet_name in xls.sheet_names if sheet_name in ALL_GERMAN_MONTHS]
+    if not month_sheets:
+        st.error(
+            "Keine deutschen Monatstabellen gefunden. Gefundene Blätter: "
+            + ", ".join(xls.sheet_names)
+        )
+        return None
+
+    try:
+        angaben_preview = _read_sheet_with_decimal_retry(xls, "Angaben")
+    except Exception as e:
+        st.error(f"Die Tabelle 'Angaben' konnte nicht gelesen werden. Details: {e}")
+        return None
+
+    task_col = _find_column_case_insensitive(angaben_preview.columns, "Task")
+    if task_col is None:
+        st.error("In der Tabelle 'Angaben' fehlt die Spalte 'Task'. Bitte prüfen Sie die Excel-Vorlage.")
+        return None
+
+    minutes_col = None
+    for col in angaben_preview.columns:
+        if any(token in normalize_text(col) for token in ["min", "minute", "vorgabe"]):
+            minutes_col = col
+            break
+    if minutes_col is None and len(angaben_preview.columns) <= 1:
+        st.error("In der Tabelle 'Angaben' fehlt eine Minuten-/Vorgabe-Spalte.")
+        return None
+
+    has_structured_month = False
+    for month in month_sheets:
+        try:
+            raw = _read_sheet_with_decimal_retry(xls, month, header=None)
+        except Exception:
+            continue
+        if _has_month_block_structure(raw):
+            has_structured_month = True
+            break
+
+    if not has_structured_month:
+        st.error(
+            "Keine Monatstabelle hat die erwartete Struktur mit Datum, Team, Schicht und KPI-Blöcken."
+        )
+        return None
+
+    return month_sheets
 
 
 def _parse_excel_date(value):
@@ -83,7 +137,7 @@ def _validate_angaben(angaben_df):
         st.error("In der Tabelle 'Angaben' fehlt eine Minuten-/Vorgabe-Spalte.")
         return None, None
 
-    angaben_df["Task"] = angaben_df["Task"].astype(str).str.strip().str.lower()
+    angaben_df["Task"] = angaben_df["Task"].apply(normalize_text)
     angaben_df = angaben_df[angaben_df["Task"].ne("") & angaben_df["Task"].ne("nan")].copy()
     if angaben_df.empty:
         st.error("Die Spalte 'Task' in 'Angaben' enthält keine gültigen Aufgaben.")
@@ -160,16 +214,8 @@ def load_excel(file):
             st.error(f"Die Excel-Datei konnte nicht geöffnet werden. Bitte prüfen Sie, ob es eine gültige .xlsx-Datei ist. Details: {e}")
             return _empty_result()
 
-        if "Angaben" not in xls.sheet_names:
-            st.error("Die Excel-Datei enthält kein Tabellenblatt 'Angaben'. Bitte laden Sie die richtige Vorlage hoch.")
-            return _empty_result()
-
-        month_sheets = [sheet_name for sheet_name in xls.sheet_names if sheet_name in ALL_MONTHS]
-        if not month_sheets:
-            st.error(
-                "Keine Monatstabellen gefunden. Erwartet werden mindestens eines dieser Blätter: "
-                + ", ".join(ALL_MONTHS)
-            )
+        month_sheets = validate_workbook(xls)
+        if month_sheets is None:
             return _empty_result()
 
         # ---------------- Load Angaben sheet ----------------
@@ -240,7 +286,7 @@ def load_excel(file):
                 schichten = block.iloc[1, 1:].tolist()
 
                 for kpi_row in range(2, block.shape[0]):
-                    kpi_name = str(block.iloc[kpi_row, 0]).strip()
+                    kpi_name = normalize_text(block.iloc[kpi_row, 0])
                     if not kpi_name:
                         continue
                     for col in range(1, block.shape[1]):
@@ -262,7 +308,7 @@ def load_excel(file):
                                 "Datum": parsed_date,
                                 "Team": team,
                                 "Schicht": schicht,
-                                "Metric": kpi_name.strip().lower(),  # normalize
+                                "Metric": kpi_name,
                                 "Value": value,
                             }
                         )
@@ -306,12 +352,7 @@ def load_excel(file):
             return _empty_result(angaben_df, minutes_col)
 
         # Normalize Metric names
-        df_long["Metric"] = (
-            df_long["Metric"]
-            .astype(str)
-            .str.strip()
-            .str.lower()
-        )
+        df_long["Metric"] = df_long["Metric"].apply(normalize_text)
 
         duplicate_keys = (
             df_long.groupby(["Datum", "Team", "Schicht", "Metric"], observed=False)
@@ -360,6 +401,19 @@ def load_excel(file):
             "vorhandene ma": ["anzahl ma"],
         }
         _warn_relevant_metric_matching_issues(df_wide, metric_sources, angaben_dict.keys())
+
+        known_sources = {source for sources in metric_sources.values() for source in sources}
+        ignored_metrics = sorted(
+            metric for metric in df_wide.columns
+            if metric not in known_sources and metric not in ["Datum", "Team", "Schicht"]
+        )
+        if ignored_metrics:
+            logger.info("Unknown KPI metrics skipped: %s", ignored_metrics)
+            with st.expander("⚠️ Unbekannte KPIs übersprungen"):
+                st.write(
+                    "Diese KPI-Zeilen wurden eingelesen, aber keiner berechneten Kennzahl zugeordnet:"
+                )
+                st.write(", ".join(ignored_metrics))
 
         for derived_metric, source_metrics in metric_sources.items():
             summary_df[derived_metric] = sum(safe_get(df_wide, source) for source in source_metrics)
