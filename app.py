@@ -1,7 +1,10 @@
 from datetime import datetime
 from typing import List, Dict
+# app.py (top of file) — add these lines BEFORE other imports that use matplotlib
 import matplotlib
-matplotlib.use("Agg")
+matplotlib.use("Agg")  # must come before importing matplotlib.pyplot anywhere
+matplotlib.rcParams["font.family"] = "DejaVu Sans"   # available on Linux, supports umlauts
+matplotlib.rcParams["figure.dpi"] = 96  # cloud-friendly default
 
 import streamlit as st
 
